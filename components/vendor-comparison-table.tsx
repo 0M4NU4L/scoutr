@@ -4,15 +4,23 @@ import Image from "next/image"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Star, ShoppingBag } from "lucide-react"
+import { Star, ShoppingBag, AlertTriangle } from "lucide-react"
 import { STORE_LOGOS, STORES } from "@/lib/constants"
+import { DataSourceIndicator } from "@/components/data-source-indicator"
 
 interface VendorComparisonTableProps {
   product: any
   cheapestStore?: string | null
+  usedMockData?: boolean
+  dataSource?: string
 }
 
-export function VendorComparisonTable({ product, cheapestStore }: VendorComparisonTableProps) {
+export function VendorComparisonTable({
+  product,
+  cheapestStore,
+  usedMockData = true,
+  dataSource = "mock",
+}: VendorComparisonTableProps) {
   if (!product || !product.stores || Object.keys(product.stores).length === 0) {
     return <div className="text-center py-4">No vendor data available for this product.</div>
   }
@@ -43,8 +51,22 @@ export function VendorComparisonTable({ product, cheapestStore }: VendorComparis
     return spec.includes(":") ? spec.split(":")[1].trim() : "Yes"
   }
 
+  // Format price in INR
+  const formatPrice = (price: number): string => {
+    if (!price) return "-"
+
+    // Format as Indian currency (₹)
+    return `₹${price.toLocaleString("en-IN")}`
+  }
+
   return (
     <div className="overflow-x-auto">
+      <div className="flex justify-end mb-2">
+        <DataSourceIndicator
+          dataSource={dataSource || product.dataSource || "unknown"}
+          usedMockData={usedMockData || product.usedMockData || false}
+        />
+      </div>
       <Table>
         <TableHeader>
           <TableRow>
@@ -64,6 +86,12 @@ export function VendorComparisonTable({ product, cheapestStore }: VendorComparis
                     <Badge className="mt-1 bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100">
                       Best Price
                     </Badge>
+                  )}
+                  {product.stores[store].isRealData === false && (
+                    <div className="flex items-center mt-1 text-xs text-amber-600">
+                      <AlertTriangle className="h-3 w-3 mr-1" />
+                      <span>Estimated</span>
+                    </div>
                   )}
                 </div>
               </TableHead>
@@ -89,7 +117,7 @@ export function VendorComparisonTable({ product, cheapestStore }: VendorComparis
                 key={store}
                 className={`text-center font-bold ${cheapestStore === store ? "text-green-600" : ""}`}
               >
-                {product.stores[store]?.price ? `₹${product.stores[store].price.toLocaleString()}` : "-"}
+                {product.stores[store]?.price ? formatPrice(product.stores[store].price) : "-"}
               </TableCell>
             ))}
           </TableRow>
@@ -127,7 +155,7 @@ export function VendorComparisonTable({ product, cheapestStore }: VendorComparis
             <TableCell className="font-medium">Reviews</TableCell>
             {stores.map((store) => (
               <TableCell key={store} className="text-center">
-                {product.stores[store]?.reviewCount ? product.stores[store].reviewCount.toLocaleString() : "-"}
+                {product.stores[store]?.reviewCount ? product.stores[store].reviewCount.toLocaleString("en-IN") : "-"}
               </TableCell>
             ))}
           </TableRow>
@@ -164,6 +192,19 @@ export function VendorComparisonTable({ product, cheapestStore }: VendorComparis
           </TableRow>
         </TableBody>
       </Table>
+
+      {usedMockData && (
+        <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-md text-amber-800 text-sm">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4" />
+            <span className="font-medium">Price Accuracy Notice</span>
+          </div>
+          <p className="mt-1">
+            Some or all of the prices shown are simulated for demonstration purposes. To get real-time accurate prices,
+            please add the required API keys in your environment variables.
+          </p>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,236 +1,137 @@
-import { NextResponse } from "next/server"
-import { generateMockResults, generateMockPriceHistory } from "./mock-data"
-import { enhanceResultsWithGemini } from "./gemini"
+// Mock data generator for when API keys are invalid or missing
 
-// In-memory cache
-const cache = new Map()
-const CACHE_DURATION = 60 * 60 * 1000 // 1 hour in milliseconds
+export function generateMockResults(query, stores) {
+  const results = {}
 
-export async function GET(request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const query = searchParams.get("q")
-    const storesParam = searchParams.get("stores") || "amazon,flipkart,croma"
-    const stores = storesParam.split(",")
+  // More realistic base price based on product category
+  const productCategory = determineProductCategory(query)
+  const basePrice = getRealisticBasePrice(productCategory)
 
-    if (!query) {
-      return NextResponse.json({ message: "Query parameter is required" }, { status: 400 })
-    }
-
-    // Check cache first
-    const cacheKey = `${query.toLowerCase()}-${storesParam}`
-    if (cache.has(cacheKey)) {
-      const { data, timestamp } = cache.get(cacheKey)
-      if (Date.now() - timestamp < CACHE_DURATION) {
-        return NextResponse.json(data)
-      }
-    }
-
-    try {
-      // Initialize results object with requested stores
-      const results = {}
-      stores.forEach((store) => {
-        results[store] = null
-      })
-
-      let usedMockData = false
-
-      try {
-        // Check if PRICEAPI_KEY exists and is not empty
-        if (!process.env.PRICEAPI_KEY || process.env.PRICEAPI_KEY.trim() === "") {
-          console.log("PriceAPI key is missing or empty. Using mock data.")
-          throw new Error("API key is missing")
-        }
-
-        // Use PriceAPI for product search
-        const apiUrl = `https://api.priceapi.com/v2/jobs`
-        const response = await fetch(apiUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.PRICEAPI_KEY}`,
-          },
-          body: JSON.stringify({
-            source: "amazon,flipkart,croma", // Multiple sources
-            country: "in",
-            topic: "search_results",
-            key: query,
-            max_age: 3600, // 1 hour for more recent prices
-            max_pages: 2, // Get more results for better matching
-            price_min: 100, // Minimum price filter
-            price_max: 1000000, // Maximum price filter
-            sort_by: "price_asc", // Sort by price to get best deals
-          }),
-        })
-
-        if (!response.ok) {
-          const errorText = await response.text()
-          console.error(`Error fetching from PriceAPI: ${response.status} ${response.statusText}`, errorText)
-          throw new Error(`API error: ${errorText}`)
-        }
-
-        const jobData = await response.json()
-        console.log(`Successfully created PriceAPI job: ${jobData.id}`)
-
-        // Wait for job completion and get results
-        const resultsUrl = `https://api.priceapi.com/v2/jobs/${jobData.id}/download`
-        const resultsResponse = await fetch(resultsUrl, {
-          headers: {
-            "Authorization": `Bearer ${process.env.PRICEAPI_KEY}`,
-          },
-        })
-
-        if (!resultsResponse.ok) {
-          throw new Error(`Failed to get PriceAPI results: ${resultsResponse.status}`)
-        }
-
-        const priceData = await resultsResponse.json()
-        console.log(`Successfully fetched data from PriceAPI`)
-
-        // Process results for each store
-        for (const store of stores) {
-          const storeResults = priceData.results.filter(item => 
-            item.source.toLowerCase().includes(store) || 
-            item.url.toLowerCase().includes(store)
-          )
-
-          if (storeResults.length > 0) {
-            // Sort by price and get the best match
-            const bestResult = storeResults.sort((a, b) => {
-              // First prioritize exact matches
-              const aExactMatch = a.title.toLowerCase().includes(query.toLowerCase())
-              const bExactMatch = b.title.toLowerCase().includes(query.toLowerCase())
-              if (aExactMatch && !bExactMatch) return -1
-              if (!aExactMatch && bExactMatch) return 1
-              
-              // Then sort by price
-              return a.price - b.price
-            })[0]
-
-            // Validate price
-            const price = Number(bestResult.price)
-            if (isNaN(price) || price <= 0) {
-              console.warn(`Invalid price for ${store}: ${bestResult.price}`)
-              continue
-            }
-
-            results[store] = {
-              title: bestResult.title,
-              price: price,
-              image: bestResult.image || "/placeholder.svg",
-              link: bestResult.url,
-              specs: extractSpecsFromTitle(bestResult.title),
-              rating: Number(bestResult.rating) || null,
-              reviewCount: Number(bestResult.review_count) || null,
-              offers: bestResult.offers || null,
-              lastUpdated: new Date().toISOString(),
-            }
-          }
-        }
-
-        // Verify we have at least one valid result
-        const validResults = Object.values(results).filter(r => r !== null)
-        if (validResults.length === 0) {
-          throw new Error("No valid results found")
-        }
-
-        // Try to enhance results with Gemini API if available
-        if (process.env.GEMINI_API_KEY) {
-          try {
-            console.log("Attempting to enhance results with Gemini API...")
-            await enhanceResultsWithGemini(results, query)
-            console.log("Gemini enhancement completed successfully")
-          } catch (geminiError) {
-            console.error("Error enhancing results with Gemini:", geminiError)
-            console.log("Continuing with original results without Gemini enhancement")
-          }
-        }
-      } catch (apiError) {
-        console.error(`API error: ${apiError.message || apiError}`)
-        console.log("Using mock data instead")
-
-        // Use mock data when API fails
-        const mockResults = generateMockResults(query, stores)
-        for (const store of stores) {
-          results[store] = mockResults[store]
-        }
-        usedMockData = true
-      }
-
-      // Generate price history data
-      const priceHistory = usedMockData ? generateMockPriceHistory(results) : generatePriceHistory(results)
-
-      const responseData = {
-        results,
-        priceHistory,
-        usedMockData,
-      }
-
-      // Cache the results
-      cache.set(cacheKey, {
-        data: responseData,
-        timestamp: Date.now(),
-      })
-
-      return NextResponse.json(responseData)
-    } catch (error) {
-      console.error("API route error:", error)
-      return NextResponse.json({ message: "An error occurred while fetching results" }, { status: 500 })
-    }
-  } catch (error) {
-    console.error("API route error:", error)
-    return NextResponse.json({ message: "An error occurred while fetching results" }, { status: 500 })
+  // More realistic price adjustments for different stores
+  const priceAdjustments = {
+    amazon: 1.0,
+    flipkart: 0.97, // Flipkart often has slightly lower prices
+    croma: 1.03, // Croma tends to be slightly higher
+    alibaba: 0.85, // Alibaba generally has lower prices
   }
-}
 
-// Function to extract specifications from product title
-function extractSpecsFromTitle(title) {
-  if (!title) return null
+  // Product types based on query
+  let productType = "smartphone"
+  let specs = ""
 
-  // Common patterns for specifications in product titles
-  const patterns = [
-    // RAM and storage pattern (e.g., "8GB RAM 128GB Storage")
-    { regex: /(\d+\s*GB\s*RAM|\d+\s*GB\s*Storage|\d+\s*TB\s*Storage)/gi, prefix: "" },
+  if (query.toLowerCase().includes("laptop")) {
+    productType = "laptop"
+    specs = "Intel Core i5 | 8GB RAM | 512GB SSD | 15.6 inch Display"
+  } else if (query.toLowerCase().includes("tv")) {
+    productType = "television"
+    specs = "4K UHD | Smart TV | HDR | 60Hz Refresh Rate"
+  } else if (query.toLowerCase().includes("headphone")) {
+    productType = "headphones"
+    specs = "Bluetooth 5.0 | Active Noise Cancellation | 20 Hour Battery"
+  } else if (query.toLowerCase().includes("watch")) {
+    productType = "smartwatch"
+    specs = "Heart Rate Monitor | GPS | 5 ATM Water Resistant | 7-Day Battery"
+  } else if (query.toLowerCase().includes("camera")) {
+    productType = "camera"
+    specs = "24MP | 4K Video | 10x Optical Zoom | Image Stabilization"
+  } else if (query.toLowerCase().includes("tablet")) {
+    productType = "tablet"
+    specs = "10.2 inch Display | 64GB Storage | Wi-Fi + Cellular | 10 Hour Battery"
+  } else {
+    // Default smartphone specs
+    specs = "6GB RAM | 128GB Storage | 48MP Camera | 5000mAh Battery"
+  }
 
-    // Screen size pattern (e.g., "6.5 inch display")
-    { regex: /(\d+(\.\d+)?\s*inch|\d+(\.\d+)?\s*")/gi, prefix: "Display: " },
+  // Generate mock data for each store
+  for (const store of stores) {
+    // Add slight random variation to make prices more realistic
+    const variationFactor = 0.98 + Math.random() * 0.04 // Between 0.98 and 1.02
+    const price = Math.round(basePrice * (priceAdjustments[store] || 1.0) * variationFactor)
 
-    // Resolution pattern (e.g., "1080p" or "4K")
-    { regex: /(1080p|2160p|4K|UHD|Full HD|HD)/gi, prefix: "Resolution: " },
+    // Get a realistic brand for this product category
+    const brandPrefix = getBrandPrefix(query, store)
 
-    // Processor pattern (e.g., "Snapdragon 888" or "A15 Bionic")
-    { regex: /(Snapdragon|Exynos|MediaTek|A\d+|Intel|AMD|Ryzen|Core i\d+)/gi, prefix: "Processor: " },
-
-    // Camera pattern (e.g., "48MP camera")
-    { regex: /(\d+\s*MP)/gi, prefix: "Camera: " },
-
-    // Battery pattern (e.g., "5000mAh")
-    { regex: /(\d+\s*mAh)/gi, prefix: "Battery: " },
-
-    // Color pattern
-    { regex: /(Black|White|Blue|Red|Green|Gold|Silver|Gray|Rose Gold|Purple)/gi, prefix: "Color: " },
-  ]
-
-  const specs = []
-
-  // Extract specs based on patterns
-  patterns.forEach((pattern) => {
-    const matches = [...title.matchAll(pattern.regex)]
-    if (matches.length > 0) {
-      // Get unique matches
-      const uniqueMatches = [...new Set(matches.map((m) => m[0]))]
-      specs.push(`${pattern.prefix}${uniqueMatches.join(", ")}`)
+    results[store] = {
+      title: `${brandPrefix} ${query} ${productType} (${store.charAt(0).toUpperCase() + store.slice(1)} Exclusive)`,
+      price: price,
+      image: `/placeholder.svg?height=200&width=200&text=${encodeURIComponent(query)}`,
+      link: `https://www.${store}.com/search?q=${encodeURIComponent(query)}`,
+      specs: specs,
+      lastUpdated: new Date().toISOString(),
+      isRealData: false, // Flag to indicate this is mock data
     }
-  })
+  }
 
-  // If we couldn't extract any specs, return null
-  if (specs.length === 0) return null
-
-  return specs.join(" | ")
+  return results
 }
 
-// Function to generate price history data
-function generatePriceHistory(results) {
+// Helper function to determine product category from query
+function determineProductCategory(query) {
+  const queryLower = query.toLowerCase()
+
+  if (queryLower.includes("laptop") || queryLower.includes("notebook")) return "laptop"
+  if (queryLower.includes("tv") || queryLower.includes("television")) return "tv"
+  if (queryLower.includes("headphone") || queryLower.includes("earphone") || queryLower.includes("earbud"))
+    return "headphone"
+  if (queryLower.includes("watch") || queryLower.includes("smartwatch")) return "watch"
+  if (queryLower.includes("camera")) return "camera"
+  if (queryLower.includes("tablet") || queryLower.includes("ipad")) return "tablet"
+  if (queryLower.includes("phone") || queryLower.includes("smartphone") || queryLower.includes("mobile")) return "phone"
+  if (queryLower.includes("monitor") || queryLower.includes("display")) return "monitor"
+  if (queryLower.includes("speaker") || queryLower.includes("sound")) return "speaker"
+  if (queryLower.includes("keyboard") || queryLower.includes("mouse")) return "peripheral"
+
+  // Default to phone if no category is detected
+  return "phone"
+}
+
+// Helper function to get realistic base price based on product category
+function getRealisticBasePrice(category) {
+  // Base prices are in INR (Indian Rupees)
+  const basePrices = {
+    laptop: 45000 + Math.floor(Math.random() * 30000), // 45,000 - 75,000 INR
+    tv: 25000 + Math.floor(Math.random() * 50000), // 25,000 - 75,000 INR
+    headphone: 2000 + Math.floor(Math.random() * 8000), // 2,000 - 10,000 INR
+    watch: 3000 + Math.floor(Math.random() * 17000), // 3,000 - 20,000 INR
+    camera: 20000 + Math.floor(Math.random() * 30000), // 20,000 - 50,000 INR
+    tablet: 15000 + Math.floor(Math.random() * 35000), // 15,000 - 50,000 INR
+    phone: 12000 + Math.floor(Math.random() * 38000), // 12,000 - 50,000 INR
+    monitor: 8000 + Math.floor(Math.random() * 22000), // 8,000 - 30,000 INR
+    speaker: 3000 + Math.floor(Math.random() * 12000), // 3,000 - 15,000 INR
+    peripheral: 1000 + Math.floor(Math.random() * 4000), // 1,000 - 5,000 INR
+  }
+
+  return basePrices[category] || 10000 + Math.floor(Math.random() * 10000) // Default: 10,000 - 20,000 INR
+}
+
+// Helper function to generate a realistic brand name based on the query
+function getBrandPrefix(query, store) {
+  const commonBrands = {
+    laptop: ["Dell", "HP", "Lenovo", "ASUS", "Acer", "Apple", "Microsoft"],
+    phone: ["Samsung", "Apple", "OnePlus", "Xiaomi", "Realme", "Vivo", "OPPO"],
+    tv: ["Samsung", "LG", "Sony", "TCL", "Hisense", "Xiaomi", "OnePlus"],
+    headphone: ["Sony", "Bose", "JBL", "Sennheiser", "Skullcandy", "Boat", "Apple"],
+    watch: ["Apple", "Samsung", "Fossil", "Garmin", "Fitbit", "Amazfit", "Noise"],
+    camera: ["Canon", "Nikon", "Sony", "Fujifilm", "Panasonic", "GoPro"],
+    tablet: ["Apple", "Samsung", "Lenovo", "Microsoft", "Xiaomi", "Realme"],
+    monitor: ["LG", "Samsung", "Dell", "ASUS", "BenQ", "ViewSonic"],
+    speaker: ["JBL", "Sony", "Bose", "Harman Kardon", "Boat", "Marshall"],
+    peripheral: ["Logitech", "Corsair", "Razer", "SteelSeries", "Microsoft", "HP"],
+  }
+
+  // Determine product category from query
+  const category = determineProductCategory(query)
+
+  // Get brands for the category
+  const brands = commonBrands[category] || commonBrands.phone // Default to phone brands
+
+  // Use query to deterministically select a brand (so same query always gets same brand)
+  const brandIndex = Math.abs(query.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0)) % brands.length
+
+  return brands[brandIndex]
+}
+
+export function generateMockPriceHistory(results) {
   const stores = Object.keys(results).filter((store) => results[store] !== null)
 
   // Skip if no valid results
@@ -239,7 +140,7 @@ function generatePriceHistory(results) {
   const today = new Date()
   const priceHistory = []
 
-  // Generate data for the last 12 months
+  // Generate data for the last 12 months with more realistic price trends
   for (let i = 11; i >= 0; i--) {
     const date = new Date(today)
     date.setMonth(today.getMonth() - i)
@@ -248,31 +149,99 @@ function generatePriceHistory(results) {
       date: `${date.toLocaleString("default", { month: "short" })} ${date.getFullYear()}`,
     }
 
-    // Add price data for each store with some random fluctuation
+    // Add price data for each store with realistic fluctuations
     for (const store of stores) {
       if (results[store]) {
         const basePrice = results[store].price
 
-        // Create realistic price fluctuations (5-15% variation)
-        const fluctuation = 0.85 + Math.random() * 0.3 // Between 0.85 and 1.15
+        // Create realistic price fluctuations based on market trends
+        // We'll use a combination of:
+        // 1. Seasonal trends (sales periods, new model releases)
+        // 2. General price decay for tech products
+        // 3. Small random fluctuations
 
-        // Add seasonal trends (higher in Nov-Dec, lower in Jan-Feb)
+        // 1. Seasonal factor
         const month = date.getMonth()
         let seasonalFactor = 1.0
 
-        if (month === 10 || month === 11) {
-          // Nov-Dec
-          seasonalFactor = 1.1 // Higher prices during holiday season
-        } else if (month === 0 || month === 1) {
-          // Jan-Feb
-          seasonalFactor = 0.9 // Lower prices after holiday season
+        // Major sales periods in India
+        if (month === 9) {
+          // October - Diwali sales
+          seasonalFactor = 0.85
+        } else if (month === 0) {
+          // January - New Year sales
+          seasonalFactor = 0.9
+        } else if (month === 7) {
+          // August - Independence Day sales
+          seasonalFactor = 0.92
+        } else if (month === 5) {
+          // June - End of financial year
+          seasonalFactor = 0.95
         }
 
-        dataPoint[store] = Math.round(basePrice * fluctuation * seasonalFactor)
+        // 2. Price decay factor - tech products generally decrease in price over time
+        // More recent months have less decay
+        const decayFactor = 1 + i * 0.01 // Older months have higher prices
+
+        // 3. Random fluctuation (small variations between -2% and +2%)
+        const randomFactor = 0.98 + Math.random() * 0.04
+
+        // Calculate final price with all factors
+        dataPoint[store] = Math.round(basePrice * seasonalFactor * decayFactor * randomFactor)
       }
     }
 
     priceHistory.push(dataPoint)
+  }
+
+  return priceHistory
+}
+
+// Generate realistic price trends for a specific product over time
+export function generateRealisticPriceTrend(basePrice, months = 12) {
+  const today = new Date()
+  const priceHistory = []
+
+  // Tech products typically follow a price decay curve
+  // New products start high and gradually decrease
+  // With occasional spikes for sales events
+
+  for (let i = months - 1; i >= 0; i--) {
+    const date = new Date(today)
+    date.setMonth(today.getMonth() - i)
+
+    // Base decay: products lose ~5% value every 3 months
+    const ageDecay = 1 + i * 0.016
+
+    // Seasonal events
+    const month = date.getMonth()
+    let seasonalFactor = 1.0
+
+    // Major sales periods
+    if (month === 9) {
+      // October - Diwali sales
+      seasonalFactor = 0.85
+    } else if (month === 0) {
+      // January - New Year sales
+      seasonalFactor = 0.9
+    } else if (month === 7) {
+      // August - Independence Day sales
+      seasonalFactor = 0.92
+    } else if (month === 5) {
+      // June - End of financial year
+      seasonalFactor = 0.95
+    }
+
+    // Small random fluctuation
+    const randomFactor = 0.98 + Math.random() * 0.04
+
+    // Calculate price for this month
+    const price = Math.round(basePrice * ageDecay * seasonalFactor * randomFactor)
+
+    priceHistory.push({
+      date: `${date.toLocaleString("default", { month: "short" })} ${date.getFullYear()}`,
+      price: price,
+    })
   }
 
   return priceHistory

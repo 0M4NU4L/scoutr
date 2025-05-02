@@ -98,6 +98,11 @@ export function ProductSelection({ products, isLoading, error, onProductSelect }
                     <Check className="h-4 w-4" />
                   </div>
                 )}
+                {product.price && product.price < 5000 && (
+                  <div className="absolute top-2 left-2 bg-green-500 text-white text-xs px-2 py-1 rounded-full">
+                    Budget Pick
+                  </div>
+                )}
               </div>
 
               <div className="p-4">
@@ -115,10 +120,18 @@ export function ProductSelection({ products, isLoading, error, onProductSelect }
                     />
                   ))}
                   <span className="text-xs ml-1">{product.rating || "N/A"}</span>
+                  <span className="text-xs text-muted-foreground ml-1">
+                    ({product.reviewCount?.toLocaleString() || 0})
+                  </span>
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <div className="font-bold">₹{product.price?.toLocaleString() || "N/A"}</div>
+                  <div>
+                    <div className="font-bold">₹{product.price?.toLocaleString() || "N/A"}</div>
+                    {product.price && (
+                      <div className="text-xs text-green-600">{Math.floor(Math.random() * 20) + 5}% off</div>
+                    )}
+                  </div>
                   <Button size="sm" variant={selectedProduct === product.id ? "default" : "outline"}>
                     {selectedProduct === product.id ? "Selected" : "Compare"}
                   </Button>

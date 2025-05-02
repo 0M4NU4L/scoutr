@@ -61,6 +61,25 @@ export default function Home() {
                 </Button>
               </div>
             </div>
+            <div className="mt-6">
+              <p className="text-sm text-muted-foreground mb-2">Trending Searches:</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {["iPhone 15", "Samsung S24", "MacBook Air", "Sony Headphones", "Gaming Laptop"].map((term) => (
+                  <Button
+                    key={term}
+                    variant="outline"
+                    size="sm"
+                    className="rounded-full"
+                    onClick={() => {
+                      setQuery(term)
+                      router.push(`/search?q=${encodeURIComponent(term)}`)
+                    }}
+                  >
+                    {term}
+                  </Button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -114,13 +133,21 @@ export default function Home() {
           {/* Store Selection */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
             {Object.keys(STORES).map((store) => (
-              <div key={store} className="flex items-center space-x-2">
+              <div
+                key={store}
+                className={`flex items-center space-x-2 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                  selectedStores[store]
+                    ? "border-blue-500 bg-blue-50 dark:bg-blue-900/20"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
+                onClick={() => handleStoreSelection(store)}
+              >
                 <Checkbox
                   id={`store-${store}`}
                   checked={selectedStores[store]}
                   onCheckedChange={() => handleStoreSelection(store)}
                 />
-                <Label htmlFor={`store-${store}`} className="flex items-center space-x-2 cursor-pointer">
+                <Label htmlFor={`store-${store}`} className="flex items-center space-x-2 cursor-pointer w-full">
                   <Image
                     src={STORE_LOGOS[store] || "/placeholder.svg"}
                     alt={`${STORES[store]} logo`}
@@ -151,6 +178,27 @@ export default function Home() {
               </Button>
             </div>
           </form>
+
+          {/* Recent Searches - Add this section */}
+          <div className="mt-8">
+            <h3 className="text-sm font-medium text-muted-foreground mb-2">Recent Searches:</h3>
+            <div className="flex flex-wrap gap-2">
+              {["MacBook Pro", "Samsung TV", "Bose Headphones"].map((term) => (
+                <Button
+                  key={term}
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => {
+                    setQuery(term)
+                    router.push(`/search?q=${encodeURIComponent(term)}`)
+                  }}
+                >
+                  {term}
+                </Button>
+              ))}
+            </div>
+          </div>
         </div>
       </section>
 
